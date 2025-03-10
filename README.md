@@ -1,3 +1,13 @@
+---
+title: Protein Sequence Table
+colorFrom: pink
+colorTo: gray
+sdk: gradio
+app_file: app.py
+pinned: false
+---
+
+
 # Protein Sequence Table
 
 A Gradio-based web application that reformats protein sequences based on UniProt IDs and displays detailed annotations in a structured format.
