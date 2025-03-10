@@ -241,13 +241,18 @@ def process_uniprot_id(uniprot_id):
 
 
 # Gradio Interface
-demo = gr.Interface(
-    fn=process_uniprot_id,
-    inputs=gr.Textbox(label="UniProt ID", placeholder="e.g., P04637"),
-    outputs=gr.Dataframe(label="Protein Sequence and Annotations"),
-    title="UniProt Protein Sequence and Annotation Viewer",
-    description="Enter a UniProt ID to view the protein sequence and its annotations in a DataFrame."
-)
+with gr.Blocks() as demo:
+    with gr.Column():
+        gr.Markdown("# Protein Sequence Analysis")
+        input_text = gr.Textbox(label="UniProt ID", placeholder="Enter UniProt ID (e.g., P53_HUMAN)")
+        submit_btn = gr.Button("Submit")
+        output_df = gr.Dataframe()
+        
+        submit_btn.click(
+            fn=process_uniprot_id,
+            inputs=input_text,
+            outputs=output_df
+        )
 
 if __name__ == "__main__":
     demo.launch()
