@@ -93,10 +93,7 @@ def create_dataframe(protein_sequence, annotations):
             "Glycosylation sites": "",
             "Phosphorylation sites": "",
             "active sites": "",
-            "metal binding sites": "",
-            "DNA binding sites": "",
-            "RNA binding sites": "",
-            "ligand binding sites": "",
+            "Binding sites": "",  # Combined binding sites column
             "modified": ""
         }
         data.append(row)
@@ -120,13 +117,6 @@ def create_dataframe(protein_sequence, annotations):
     region_mapping = {
         'pfam': 'Pfam domain',
         'disorder': 'Disorder'
-    }
-    
-    binding_mapping = {
-        'metal': 'metal binding sites',
-        'dna': 'DNA binding sites',
-        'rna': 'RNA binding sites',
-        'ligand': 'ligand binding sites'
     }
 
     for feature_type, values in annotations.items():
@@ -187,27 +177,16 @@ def create_dataframe(protein_sequence, annotations):
                     
                 start = int(start)
                 end = int(end) if end else start
-                desc = item['description'].lower()
+                desc = item['description']
                 
-                # Map to appropriate column based on description
-                column = None
-                if 'metal' in desc:
-                    column = 'metal binding sites'
-                elif 'dna' in desc:
-                    column = 'DNA binding sites'
-                elif 'rna' in desc:
-                    column = 'RNA binding sites'
-                else:
-                    column = 'ligand binding sites'
-                    
                 for i in range(start - 1, end):
                     if i >= len(df):
                         continue
-                    current = df.at[i, column]
+                    current = df.at[i, 'Binding sites']
                     if isinstance(current, str) and current != "" and desc:
-                        df.at[i, column] = f"{current}; {desc}"
+                        df.at[i, 'Binding sites'] = f"{current}; {desc}"
                     elif desc:
-                        df.at[i, column] = desc
+                        df.at[i, 'Binding sites'] = desc
         
         # Handle other features
         else:
