@@ -93,38 +93,37 @@ def create_dataframe(protein_sequence, annotations):
 
     # Map UniProt feature types to our column names
     feature_mapping = {
-        'helix': 'Secondary structure',
         'strand': 'Secondary structure',
+        'helix': 'Secondary structure', 
         'turn': 'Secondary structure',
         'domain': 'Domain',
-        'region': ['Pfam domain', 'Disorder'],  # Will check description
+        'region': ['Pfam domain', 'Disorder'],
         'disulfide bond': 'Disulfide bridges',
         'glycosylation site': 'Glycosylation sites',
         'modified residue': 'modified',
         'active site': 'active sites',
-        'binding site': ['metal binding sites', 'DNA binding sites', 'RNA binding sites', 'ligand binding sites'],  # Will check description
-        'site': 'Phosphorylation sites'  # Will check description for phosphorylation
+        'binding site': ['metal binding sites', 'DNA binding sites', 'RNA binding sites', 'ligand binding sites'],
+        'site': 'Phosphorylation sites'
     }
 
     for feature_type, values in annotations.items():
+        feature_type = feature_type.lower()  # Convert to lowercase for matching
         for start, end, description in values:
-            feature_type_lower = feature_type.lower()
-            
             # Get the corresponding column(s)
-            column = feature_mapping.get(feature_type_lower)
+            column = feature_mapping.get(feature_type)
             if not column:
                 continue
                 
             # Handle cases where one feature type maps to multiple possible columns
             if isinstance(column, list):
-                if feature_type_lower == 'region':
+                if feature_type == 'region':
                     if 'Pfam' in description:
                         column = 'Pfam domain'
                     elif 'disorder' in description.lower():
                         column = 'Disorder'
                     else:
                         continue
-                elif feature_type_lower == 'binding site':
+                elif feature_type == 'binding site':
                     if 'metal' in description.lower():
                         column = 'metal binding sites'
                     elif 'DNA' in description:
@@ -137,11 +136,14 @@ def create_dataframe(protein_sequence, annotations):
             # Fill in the annotation
             for i in range(start - 1, end):
                 if i < len(df):
-                    current_value = df.loc[i, column]
-                    if current_value:
-                        df.loc[i, column] = f"{current_value}; {description}"
+                    if column == 'Secondary structure':
+                        df.loc[i, column] = feature_type.upper()  # Use uppercase for secondary structure
                     else:
-                        df.loc[i, column] = description
+                        current_value = df.loc[i, column]
+                        if current_value:
+                            df.loc[i, column] = f"{current_value}; {description}"
+                        else:
+                            df.loc[i, column] = description
 
     return df
 
