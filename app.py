@@ -244,8 +244,27 @@ def process_uniprot_id(uniprot_id):
 with gr.Blocks() as demo:
     with gr.Column():
         gr.Markdown("# Protein Sequence Analysis")
-        input_text = gr.Textbox(label="UniProt ID", placeholder="Enter UniProt ID (e.g., P53_HUMAN)")
+        input_text = gr.Textbox(
+            label="UniProt ID", 
+            placeholder="Enter UniProt ID (e.g., P53_HUMAN)",
+            value="",  # Empty default value
+        )
         submit_btn = gr.Button("Submit")
+        
+        # Add examples
+        gr.Examples(
+            examples=[
+                ["P06280"],  # Alpha-galactosidase A
+                ["P04637"],  # Tumor protein p53
+                ["P01308"],  # Insulin
+                ["Q8WZ42"],  # Titin
+                ["P04637"],  # p53 (alternate entry)
+                ["P0DTC2"],  # SARS-CoV-2 Spike protein
+            ],
+            inputs=input_text,
+            label="Example UniProt IDs"
+        )
+
         output_df = gr.Dataframe()
         
         submit_btn.click(
