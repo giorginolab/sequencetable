@@ -23,40 +23,52 @@ def get_uniprot_data(uniprot_id):
         url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
         response = urlopen(url).read().decode('utf-8')
         
-        # Parse XML
+        # Parse XML with namespace
         root = ET.fromstring(response)
+        ns = {'up': 'http://uniprot.org/uniprot'}
         
         # Get sequence
-        sequence_elem = root.find(".//{http://uniprot.org/uniprot}sequence")
+        sequence_elem = root.find(".//up:sequence", ns)
         if sequence_elem is None:
             return None, None, "Could not find sequence in UniProt response"
         protein_sequence = sequence_elem.text.strip()
         
         # Get feature annotations
         annotations = {}
-        for feature in root.findall(".//{http://uniprot.org/uniprot}feature"):
+        for feature in root.findall(".//up:feature", ns):
             feature_type = feature.get('type')
             description = feature.get('description', '')
             
             # Get position information
-            location = feature.find("{http://uniprot.org/uniprot}location")
+            location = feature.find("up:location", ns)
             if location is None:
                 continue
-                
-            position = location.find("{http://uniprot.org/uniprot}position")
+            
+            # Handle different types of position elements
+            position = location.find("up:position", ns)
+            begin = location.find("up:begin", ns)
+            end_elem = location.find("up:end", ns)
+            
             if position is not None:
-                start = end = int(position.get('position'))
-            else:
-                begin = location.find("{http://uniprot.org/uniprot}begin")
-                end_elem = location.find("{http://uniprot.org/uniprot}end")
-                if begin is None or end_elem is None:
-                    continue
+                pos = int(position.get('position'))
+                # For single position features
+                if feature_type not in annotations:
+                    annotations[feature_type] = []
+                annotations[feature_type].append({
+                    'position': pos,
+                    'description': description
+                })
+            elif begin is not None and end_elem is not None:
                 start = int(begin.get('position'))
                 end = int(end_elem.get('position'))
-            
-            if feature_type not in annotations:
-                annotations[feature_type] = []
-            annotations[feature_type].append((start, end, description))
+                # For range features and disulfide bonds
+                if feature_type not in annotations:
+                    annotations[feature_type] = []
+                annotations[feature_type].append({
+                    'begin': start,
+                    'end': end,
+                    'description': description
+                })
             
         return protein_sequence, annotations, None
         
@@ -97,53 +109,133 @@ def create_dataframe(protein_sequence, annotations):
         'helix': 'Secondary structure', 
         'turn': 'Secondary structure',
         'domain': 'Domain',
-        'region': ['Pfam domain', 'Disorder'],
         'disulfide bond': 'Disulfide bridges',
         'glycosylation site': 'Glycosylation sites',
         'modified residue': 'modified',
         'active site': 'active sites',
-        'binding site': ['metal binding sites', 'DNA binding sites', 'RNA binding sites', 'ligand binding sites'],
         'site': 'Phosphorylation sites'
     }
 
+    # Special mappings that need additional processing
+    region_mapping = {
+        'pfam': 'Pfam domain',
+        'disorder': 'Disorder'
+    }
+    
+    binding_mapping = {
+        'metal': 'metal binding sites',
+        'dna': 'DNA binding sites',
+        'rna': 'RNA binding sites',
+        'ligand': 'ligand binding sites'
+    }
+
     for feature_type, values in annotations.items():
-        feature_type = feature_type.lower()  # Convert to lowercase for matching
-        for start, end, description in values:
-            # Get the corresponding column(s)
+        feature_type = feature_type.lower()
+        
+        # Handle disulfide bond pairs
+        if feature_type == 'disulfide bond':
+            for item in values:
+                start = item['begin']
+                end = item['end']
+                desc = f"Disulfide bridge with Cys-{end}"
+                df.at[start-1, 'Disulfide bridges'] = desc
+                desc = f"Disulfide bridge with Cys-{start}"
+                df.at[end-1, 'Disulfide bridges'] = desc
+                
+        # Handle glycosylation sites
+        elif feature_type == 'glycosylation site':
+            for item in values:
+                pos = item['position'] - 1
+                df.at[pos, 'Glycosylation sites'] = item['description']
+                
+        # Handle region features
+        elif feature_type == 'region':
+            for item in values:
+                start = item.get('begin', item.get('position'))
+                end = item.get('end', item.get('position'))
+                if not start:
+                    continue
+                    
+                start = int(start)
+                end = int(end) if end else start
+                desc = item['description'].lower()
+                
+                # Map to appropriate column based on description
+                column = None
+                if 'pfam' in desc:
+                    column = 'Pfam domain'
+                elif 'disorder' in desc:
+                    column = 'Disorder'
+                    
+                if column:
+                    for i in range(start - 1, end):
+                        if i >= len(df):
+                            continue
+                        current = df.at[i, column]
+                        if isinstance(current, str) and current != "" and desc:
+                            df.at[i, column] = f"{current}; {desc}"
+                        elif desc:
+                            df.at[i, column] = desc
+                            
+        # Handle binding site features
+        elif feature_type == 'binding site':
+            for item in values:
+                start = item.get('begin', item.get('position'))
+                end = item.get('end', item.get('position'))
+                if not start:
+                    continue
+                    
+                start = int(start)
+                end = int(end) if end else start
+                desc = item['description'].lower()
+                
+                # Map to appropriate column based on description
+                column = None
+                if 'metal' in desc:
+                    column = 'metal binding sites'
+                elif 'dna' in desc:
+                    column = 'DNA binding sites'
+                elif 'rna' in desc:
+                    column = 'RNA binding sites'
+                else:
+                    column = 'ligand binding sites'
+                    
+                for i in range(start - 1, end):
+                    if i >= len(df):
+                        continue
+                    current = df.at[i, column]
+                    if isinstance(current, str) and current != "" and desc:
+                        df.at[i, column] = f"{current}; {desc}"
+                    elif desc:
+                        df.at[i, column] = desc
+        
+        # Handle other features
+        else:
             column = feature_mapping.get(feature_type)
             if not column:
                 continue
                 
-            # Handle cases where one feature type maps to multiple possible columns
-            if isinstance(column, list):
-                if feature_type == 'region':
-                    if 'Pfam' in description:
-                        column = 'Pfam domain'
-                    elif 'disorder' in description.lower():
-                        column = 'Disorder'
-                    else:
+            for item in values:
+                start = item.get('begin', item.get('position'))
+                end = item.get('end', item.get('position'))
+                if not start:
+                    continue
+                    
+                start = int(start)
+                end = int(end) if end else start
+                
+                for i in range(start - 1, end):
+                    if i >= len(df):
                         continue
-                elif feature_type == 'binding site':
-                    if 'metal' in description.lower():
-                        column = 'metal binding sites'
-                    elif 'DNA' in description:
-                        column = 'DNA binding sites'
-                    elif 'RNA' in description:
-                        column = 'RNA binding sites'
-                    else:
-                        column = 'ligand binding sites'
-                        
-            # Fill in the annotation
-            for i in range(start - 1, end):
-                if i < len(df):
                     if column == 'Secondary structure':
-                        df.loc[i, column] = feature_type.upper()  # Use uppercase for secondary structure
+                        df.at[i, column] = feature_type.upper()
                     else:
-                        current_value = df.loc[i, column]
-                        if current_value:
-                            df.loc[i, column] = f"{current_value}; {description}"
-                        else:
-                            df.loc[i, column] = description
+                        current = df.at[i, column]
+                        desc = item['description']
+                        if isinstance(current, str) and current != "" and desc:
+                            df.at[i, column] = f"{current}; {desc}"
+                        elif desc:
+                            df.at[i, column] = desc
 
     return df
 
@@ -170,7 +262,7 @@ def process_uniprot_id(uniprot_id):
 
 
 # Gradio Interface
-iface = gr.Interface(
+demo = gr.Interface(
     fn=process_uniprot_id,
     inputs=gr.Textbox(label="UniProt ID", placeholder="e.g., P04637"),
     outputs=gr.Dataframe(label="Protein Sequence and Annotations"),
@@ -178,4 +270,5 @@ iface = gr.Interface(
     description="Enter a UniProt ID to view the protein sequence and its annotations in a DataFrame."
 )
 
-iface.launch()
+if __name__ == "__main__":
+    demo.launch()
