@@ -18,62 +18,58 @@ def get_uniprot_data(uniprot_id):
         - annotations: A dictionary containing annotations.
         - error_message: An error message if something goes wrong, otherwise None
     """
-    try:
-        # Fetch XML data
-        url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
-        response = urlopen(url).read().decode('utf-8')
+    # Fetch XML data
+    url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
+    response = urlopen(url).read().decode('utf-8')
+    
+    # Parse XML with namespace
+    root = ET.fromstring(response)
+    ns = {'up': 'http://uniprot.org/uniprot'}
+    
+    # Get sequence
+    sequence_elem = root.find("./up:entry/up:sequence", ns)
+    if sequence_elem is None:
+        return None, None, "Could not find sequence in UniProt response"
+    protein_sequence = sequence_elem.text.strip()
+    
+    # Get feature annotations
+    annotations = {}
+    for feature in root.findall(".//up:feature", ns):
+        feature_type = feature.get('type')
+        description = feature.get('description', '')
         
-        # Parse XML with namespace
-        root = ET.fromstring(response)
-        ns = {'up': 'http://uniprot.org/uniprot'}
+        # Get position information
+        location = feature.find("up:location", ns)
+        if location is None:
+            continue
         
-        # Get sequence
-        sequence_elem = root.find(".//up:sequence", ns)
-        if sequence_elem is None:
-            return None, None, "Could not find sequence in UniProt response"
-        protein_sequence = sequence_elem.text.strip()
+        # Handle different types of position elements
+        position = location.find("up:position", ns)
+        begin = location.find("up:begin", ns)
+        end_elem = location.find("up:end", ns)
         
-        # Get feature annotations
-        annotations = {}
-        for feature in root.findall(".//up:feature", ns):
-            feature_type = feature.get('type')
-            description = feature.get('description', '')
-            
-            # Get position information
-            location = feature.find("up:location", ns)
-            if location is None:
-                continue
-            
-            # Handle different types of position elements
-            position = location.find("up:position", ns)
-            begin = location.find("up:begin", ns)
-            end_elem = location.find("up:end", ns)
-            
-            if position is not None:
-                pos = int(position.get('position'))
-                # For single position features
-                if feature_type not in annotations:
-                    annotations[feature_type] = []
-                annotations[feature_type].append({
-                    'position': pos,
-                    'description': description
-                })
-            elif begin is not None and end_elem is not None:
-                start = int(begin.get('position'))
-                end = int(end_elem.get('position'))
-                # For range features and disulfide bonds
-                if feature_type not in annotations:
-                    annotations[feature_type] = []
-                annotations[feature_type].append({
-                    'begin': start,
-                    'end': end,
-                    'description': description
-                })
-            
-        return protein_sequence, annotations, None
+        if position is not None:
+            pos = int(position.get('position'))
+            # For single position features
+            if feature_type not in annotations:
+                annotations[feature_type] = []
+            annotations[feature_type].append({
+                'position': pos,
+                'description': description
+            })
+        elif begin is not None and end_elem is not None:
+            start = int(begin.get('position'))
+            end = int(end_elem.get('position'))
+            # For range features and disulfide bonds
+            if feature_type not in annotations:
+                annotations[feature_type] = []
+            annotations[feature_type].append({
+                'begin': start,
+                'end': end,
+                'description': description
+            })
         
-    except Exception as e:
-        return None, None, f"Error fetching or processing data from UniProt: {e}"
+    return protein_sequence, annotations
 
 def create_dataframe(protein_sequence, annotations):
     """
@@ -127,9 +123,9 @@ def create_dataframe(protein_sequence, annotations):
             for item in values:
                 start = item['begin']
                 end = item['end']
-                desc = f"Disulfide bridge with Cys-{end}"
+                desc = f"Cys-{end}"
                 df.at[start-1, 'Disulfide bridges'] = desc
-                desc = f"Disulfide bridge with Cys-{start}"
+                desc = f"Cys-{start}"
                 df.at[end-1, 'Disulfide bridges'] = desc
                 
         # Handle glycosylation sites
@@ -228,10 +224,7 @@ def process_uniprot_id(uniprot_id):
     Returns:
         A Pandas DataFrame or an error message.
     """
-    protein_sequence, annotations, error_message = get_uniprot_data(uniprot_id)
-
-    if error_message:
-        return error_message
+    protein_sequence, annotations = get_uniprot_data(uniprot_id)
 
     if protein_sequence and annotations:
         df = create_dataframe(protein_sequence, annotations)
@@ -255,17 +248,17 @@ with gr.Blocks() as demo:
         gr.Examples(
             examples=[
                 ["P06280"],  # Alpha-galactosidase A
-                ["P04637"],  # Tumor protein p53
+                ["P07550"],  # beta-2 AR
                 ["P01308"],  # Insulin
                 ["Q8WZ42"],  # Titin
-                ["P04637"],  # p53 (alternate entry)
                 ["P0DTC2"],  # SARS-CoV-2 Spike protein
             ],
+            example_labels=["Alpha-galactosidase A", "Beta-2 adrenergic receptor", "Insulin", "Titin", "SARS-CoV-2 Spike protein"],
             inputs=input_text,
             label="Example UniProt IDs"
         )
 
-        output_df = gr.Dataframe()
+        output_df = gr.Dataframe(interactive=False)
         
         submit_btn.click(
             fn=process_uniprot_id,
