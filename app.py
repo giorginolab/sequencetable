@@ -19,8 +19,14 @@ def get_uniprot_data(uniprot_id):
         - error_message: An error message if something goes wrong, otherwise None
     """
     # Fetch XML data
-    url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
-    response = urlopen(url).read().decode('utf-8')
+    local_file_path = os.path.join("test", f"{uniprot_id}.xml")
+    if os.path.exists(local_file_path):
+        with open(local_file_path, "r", encoding="utf-8") as file:
+            response = file.read()
+    else:
+        # Fetch XML data from UniProt
+        url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
+        response = urlopen(url).read().decode('utf-8')
     
     # Parse XML with namespace
     root = ET.fromstring(response)
