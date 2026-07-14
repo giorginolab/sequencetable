@@ -1,6 +1,8 @@
 import tempfile
+from pathlib import Path
 
 import gradio as gr
+from gradio.utils import get_upload_folder
 
 from uniprot_data import create_dataframe, get_uniprot_data
 
@@ -15,19 +17,25 @@ def process_uniprot_id(uniprot_id):
     Returns:
         Tuple of (DataFrame, downloadable file) or error message
     """
-    protein_sequence, annotations = get_uniprot_data(uniprot_id)
+    protein_sequence, annotations, error_message = get_uniprot_data(uniprot_id)
 
-    if protein_sequence and annotations:
-        df = create_dataframe(protein_sequence, annotations)
-        # Create Excel file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
-        df.to_excel(temp_file.name, index=False)
-        return df, temp_file.name
-    return "Could not retrieve or process data for the given Uniprot ID", None
+    if error_message or not protein_sequence:
+        return error_message or "Could not process the given UniProt ID.", None
+
+    df = create_dataframe(protein_sequence, annotations)
+
+    cache_directory = Path(get_upload_folder())
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".xlsx", dir=cache_directory
+    ) as temp_file:
+        output_path = temp_file.name
+    df.to_excel(output_path, index=False)
+    return df, output_path
 
 
 # Gradio Interface
-with gr.Blocks() as demo:
+with gr.Blocks(delete_cache=(3600, 3600)) as demo:
     with gr.Column():
         gr.Markdown("# Protein Sequence Analysis")
         gr.Markdown(
@@ -66,10 +74,10 @@ with gr.Blocks() as demo:
         output_df = gr.Dataframe(interactive=False)
         download_btn = gr.DownloadButton(label="Download Excel")
 
-        outputs = submit_btn.click(
-            fn=process_uniprot_id, 
-            inputs=input_text, 
-            outputs=[output_df, download_btn]
+        submit_btn.click(
+            fn=process_uniprot_id,
+            inputs=input_text,
+            outputs=[output_df, download_btn],
         )
 
 if __name__ == "__main__":

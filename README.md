@@ -18,7 +18,7 @@ The application retrieves protein data from UniProt and presents the following i
 - Position number in the sequence
 - Amino acid (single-letter code)
 - Secondary structure annotation
-- Associated Pfam domain
+- Protein-level Pfam cross-references
 - Disorder prediction
 - Participation in disulfide bridges
 - Post-translational modifications:
@@ -55,6 +55,12 @@ To run the linter:
 
 ```bash
 uv run ruff check .
+```
+
+To run the test suite:
+
+```bash
+uv run pytest
 ```
 
 ## Requirements

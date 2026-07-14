@@ -1,213 +1,262 @@
-import os
+import re
 import xml.etree.ElementTree as ET
+from collections import defaultdict
+from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import quote
 from urllib.request import urlopen
 
 import pandas as pd
 
+UNIPROT_NAMESPACE = {"up": "http://uniprot.org/uniprot"}
+UNIPROT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+FIXTURE_DIRECTORY = Path(__file__).resolve().parent / "test"
 
-def get_uniprot_data(uniprot_id):
-    """
-    Fetches protein sequence and annotation data from UniProt in XML format.
+DATAFRAME_COLUMNS = [
+    "Residue Number",
+    "Residue code",
+    "Secondary structure",
+    "Domain",
+    "Pfam entries (protein-level)",
+    "Disorder",
+    "Disulfide bridges",
+    "Glycosylation sites",
+    "Phosphorylation sites",
+    "active sites",
+    "Binding sites",
+    "modified",
+]
 
-    Args:
-        uniprot_id: The UniProt ID of the protein.
 
-    Returns:
-        A tuple containing:
-        - protein_sequence: The protein sequence as a string.
-        - annotations: A dictionary containing annotations.
-        - error_message: An error message if something goes wrong, otherwise None
-    """
-    # Fetch XML data
-    local_file_path = os.path.join("test", f"{uniprot_id}.xml")
-    if os.path.exists(local_file_path):
-        with open(local_file_path, "r", encoding="utf-8") as file:
-            response = file.read()
-    else:
-        # Fetch XML data from UniProt
-        url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
-        response = urlopen(url).read().decode("utf-8")
+def _exact_position(element):
+    """Return a positive position, or None for unknown/invalid locations."""
+    if element is None:
+        return None
 
-    # Parse XML with namespace
-    root = ET.fromstring(response)
-    ns = {"up": "http://uniprot.org/uniprot"}
+    value = element.get("position")
+    if value is None:
+        return None
 
-    # Get sequence
-    sequence_elem = root.find("./up:entry/up:sequence", ns)
-    if sequence_elem is None:
-        return None, None, "Could not find sequence in UniProt response"
-    protein_sequence = sequence_elem.text.strip()
+    try:
+        position = int(value)
+    except (TypeError, ValueError):
+        return None
+    return position if position > 0 else None
 
-    # Get feature annotations
-    annotations = {}
-    for feature in root.findall(".//up:feature", ns):
+
+def _feature_description(feature):
+    description = feature.get("description", "").strip()
+    if description:
+        return description
+
+    ligand = feature.find("up:ligand", UNIPROT_NAMESPACE)
+    if ligand is None:
+        return ""
+
+    name = ligand.findtext("up:name", default="", namespaces=UNIPROT_NAMESPACE).strip()
+    note = ligand.findtext("up:note", default="", namespaces=UNIPROT_NAMESPACE).strip()
+    if name and note:
+        return f"{name} ({note})"
+    return name or note
+
+
+def _normalized_feature_type(feature_type, description):
+    feature_type = feature_type.lower()
+    description = description.lower()
+
+    if feature_type == "modified residue" and "phospho" in description:
+        return "phosphorylation site"
+    if feature_type in {"region", "region of interest"} and "disorder" in description:
+        return "disorder"
+    if feature_type == "region" and "pfam" in description:
+        return "pfam"
+    return feature_type
+
+
+def _parse_uniprot_xml(response):
+    try:
+        root = ET.fromstring(response)
+    except (ET.ParseError, TypeError, ValueError):
+        return None, {}, "UniProt returned data that could not be parsed."
+
+    sequence_elem = root.find("./up:entry/up:sequence", UNIPROT_NAMESPACE)
+    if sequence_elem is None or not sequence_elem.text:
+        return None, {}, "Could not find a protein sequence in the UniProt response."
+
+    protein_sequence = "".join(sequence_elem.text.split())
+    if not protein_sequence:
+        return None, {}, "Could not find a protein sequence in the UniProt response."
+
+    annotations = defaultdict(list)
+    for feature in root.findall(".//up:feature", UNIPROT_NAMESPACE):
         feature_type = feature.get("type")
-        description = feature.get("description", "")
-
-        # Get position information
-        location = feature.find("up:location", ns)
-        if location is None:
+        if not feature_type:
             continue
 
-        # Handle different types of position elements
-        position = location.find("up:position", ns)
-        begin = location.find("up:begin", ns)
-        end_elem = location.find("up:end", ns)
+        location = feature.find("up:location", UNIPROT_NAMESPACE)
+        if location is None or location.get("sequence") is not None:
+            # Locations on non-canonical sequences do not index this table.
+            continue
+
+        position = _exact_position(location.find("up:position", UNIPROT_NAMESPACE))
+        begin = _exact_position(location.find("up:begin", UNIPROT_NAMESPACE))
+        end = _exact_position(location.find("up:end", UNIPROT_NAMESPACE))
 
         if position is not None:
-            pos = int(position.get("position"))
-            # For single position features
-            if feature_type not in annotations:
-                annotations[feature_type] = []
-            annotations[feature_type].append(
-                {"position": pos, "description": description}
-            )
-        elif begin is not None and end_elem is not None:
-            start = int(begin.get("position"))
-            end = int(end_elem.get("position"))
-            # For range features and disulfide bonds
-            if feature_type not in annotations:
-                annotations[feature_type] = []
-            annotations[feature_type].append(
-                {"begin": start, "end": end, "description": description}
+            coordinates = {"position": position}
+        elif begin is not None and end is not None:
+            coordinates = {"begin": begin, "end": end}
+        else:
+            # UniProt permits uncertain and unknown locations without a position.
+            continue
+
+        description = _feature_description(feature)
+        normalized_type = _normalized_feature_type(feature_type, description)
+        annotations[normalized_type].append(
+            {**coordinates, "description": description}
+        )
+
+    # UniProt XML exposes Pfam as protein-level cross-references, without residue
+    # coordinates. Label that scope explicitly instead of presenting blank or
+    # misleading residue-level domain ranges.
+    for reference in root.findall(
+        "./up:entry/up:dbReference[@type='Pfam']", UNIPROT_NAMESPACE
+    ):
+        reference_id = reference.get("id", "").strip()
+        entry_name = ""
+        for prop in reference.findall("up:property", UNIPROT_NAMESPACE):
+            if prop.get("type") == "entry name":
+                entry_name = prop.get("value", "").strip()
+                break
+
+        description = reference_id
+        if reference_id and entry_name:
+            description = f"{reference_id} ({entry_name})"
+        elif entry_name:
+            description = entry_name
+
+        if description:
+            annotations["pfam"].append(
+                {
+                    "begin": 1,
+                    "end": len(protein_sequence),
+                    "description": description,
+                }
             )
 
-    return protein_sequence, annotations
+    return protein_sequence, dict(annotations), None
+
+
+def get_uniprot_data(uniprot_id):
+    """Fetch a UniProt sequence and its annotations.
+
+    Returns a consistent ``(sequence, annotations, error_message)`` tuple.
+    ``error_message`` is None on success.
+    """
+    if not isinstance(uniprot_id, str):
+        return None, {}, "Please enter a valid UniProt ID."
+
+    uniprot_id = uniprot_id.strip()
+    if not uniprot_id or not UNIPROT_ID_PATTERN.fullmatch(uniprot_id):
+        return None, {}, "Please enter a valid UniProt ID."
+
+    local_file_path = FIXTURE_DIRECTORY / f"{uniprot_id}.xml"
+    try:
+        if local_file_path.is_file():
+            response = local_file_path.read_bytes()
+        else:
+            encoded_id = quote(uniprot_id, safe="")
+            url = f"https://rest.uniprot.org/uniprotkb/{encoded_id}?format=xml"
+            with urlopen(url, timeout=30) as remote_response:
+                response = remote_response.read()
+    except (OSError, TimeoutError, URLError):
+        return None, {}, f"Could not retrieve UniProt entry {uniprot_id}."
+
+    return _parse_uniprot_xml(response)
+
+
+def _annotation_range(item, sequence_length):
+    start = item.get("begin", item.get("position"))
+    end = item.get("end", item.get("position"))
+    try:
+        start = int(start)
+        end = int(end)
+    except (TypeError, ValueError):
+        return None
+
+    if start < 1 or end < start or end > sequence_length:
+        return None
+    return start - 1, end
+
+
+def _append_value(df, row, column, value):
+    if not value:
+        return
+
+    current = df.at[row, column]
+    if not current:
+        df.at[row, column] = value
+    elif current != value:
+        df.at[row, column] = f"{current}; {value}"
 
 
 def create_dataframe(protein_sequence, annotations):
-    """
-    Creates a Pandas DataFrame from protein sequence and annotations.
-    """
-    data = []
-    for i, residue in enumerate(protein_sequence):
-        residue_number = i + 1
-        row = {
-            "Residue Number": residue_number,
-            "Residue code": residue,
-            "Secondary structure": "",
-            "Domain": "",
-            "Pfam domain": "",
-            "Disorder": "",
-            "Disulfide bridges": "",
-            "Glycosylation sites": "",
-            "Phosphorylation sites": "",
-            "active sites": "",
-            "Binding sites": "",  # Combined binding sites column
-            "modified": "",
-        }
-        data.append(row)
+    """Create a residue-level dataframe from a sequence and annotations."""
+    rows = []
+    for residue_number, residue in enumerate(protein_sequence, start=1):
+        rows.append(
+            {
+                "Residue Number": residue_number,
+                "Residue code": residue,
+                **{column: "" for column in DATAFRAME_COLUMNS[2:]},
+            }
+        )
 
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(rows, columns=DATAFRAME_COLUMNS)
+    sequence_length = len(protein_sequence)
 
-    # Map UniProt feature types to our column names
     feature_mapping = {
         "strand": "Secondary structure",
         "helix": "Secondary structure",
         "turn": "Secondary structure",
         "domain": "Domain",
-        "disulfide bond": "Disulfide bridges",
+        "pfam": "Pfam entries (protein-level)",
+        "disorder": "Disorder",
         "glycosylation site": "Glycosylation sites",
+        "phosphorylation site": "Phosphorylation sites",
         "modified residue": "modified",
         "active site": "active sites",
-        "site": "Phosphorylation sites",
+        "binding site": "Binding sites",
     }
 
     for feature_type, values in annotations.items():
         feature_type = feature_type.lower()
 
-        # Handle disulfide bond pairs
         if feature_type == "disulfide bond":
             for item in values:
-                start = item["begin"]
-                end = item["end"]
-                desc = f"Cys-{end}"
-                df.at[start - 1, "Disulfide bridges"] = desc
-                desc = f"Cys-{start}"
-                df.at[end - 1, "Disulfide bridges"] = desc
-
-        # Handle glycosylation sites
-        elif feature_type == "glycosylation site":
-            for item in values:
-                pos = item["position"] - 1
-                df.at[pos, "Glycosylation sites"] = item["description"]
-
-        # Handle region features
-        elif feature_type == "region":
-            for item in values:
-                start = item.get("begin", item.get("position"))
-                end = item.get("end", item.get("position"))
-                if not start:
+                annotation_range = _annotation_range(item, sequence_length)
+                if annotation_range is None:
                     continue
+                start, end = annotation_range
+                _append_value(df, start, "Disulfide bridges", f"Cys-{end + 1}")
+                _append_value(df, end - 1, "Disulfide bridges", f"Cys-{start + 1}")
+            continue
 
-                start = int(start)
-                end = int(end) if end else start
-                desc = item["description"].lower()
+        column = feature_mapping.get(feature_type)
+        if column is None:
+            continue
 
-                # Map to appropriate column based on description
-                column = None
-                if "pfam" in desc:
-                    column = "Pfam domain"
-                elif "disorder" in desc:
-                    column = "Disorder"
-
-                if column:
-                    for i in range(start - 1, end):
-                        if i >= len(df):
-                            continue
-                        current = df.at[i, column]
-                        if isinstance(current, str) and current != "" and desc:
-                            df.at[i, column] = f"{current}; {desc}"
-                        elif desc:
-                            df.at[i, column] = desc
-
-        # Handle binding site features
-        elif feature_type == "binding site":
-            for item in values:
-                start = item.get("begin", item.get("position"))
-                end = item.get("end", item.get("position"))
-                if not start:
-                    continue
-
-                start = int(start)
-                end = int(end) if end else start
-                desc = item["description"]
-
-                for i in range(start - 1, end):
-                    if i >= len(df):
-                        continue
-                    current = df.at[i, "Binding sites"]
-                    if isinstance(current, str) and current != "" and desc:
-                        df.at[i, "Binding sites"] = f"{current}; {desc}"
-                    elif desc:
-                        df.at[i, "Binding sites"] = desc
-
-        # Handle other features
-        else:
-            column = feature_mapping.get(feature_type)
-            if not column:
+        for item in values:
+            annotation_range = _annotation_range(item, sequence_length)
+            if annotation_range is None:
                 continue
 
-            for item in values:
-                start = item.get("begin", item.get("position"))
-                end = item.get("end", item.get("position"))
-                if not start:
-                    continue
+            start, end = annotation_range
+            value = item.get("description", "")
+            if column == "Secondary structure":
+                value = feature_type.upper()
 
-                start = int(start)
-                end = int(end) if end else start
-
-                for i in range(start - 1, end):
-                    if i >= len(df):
-                        continue
-                    if column == "Secondary structure":
-                        df.at[i, column] = feature_type.upper()
-                    else:
-                        current = df.at[i, column]
-                        desc = item["description"]
-                        if isinstance(current, str) and current != "" and desc:
-                            df.at[i, column] = f"{current}; {desc}"
-                        elif desc:
-                            df.at[i, column] = desc
+            for row in range(start, end):
+                _append_value(df, row, column, value)
 
     return df
