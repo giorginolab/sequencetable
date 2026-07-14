@@ -1,6 +1,6 @@
-import io
-import gradio as gr
 import tempfile
+
+import gradio as gr
 
 from uniprot_data import create_dataframe, get_uniprot_data
 
@@ -31,7 +31,10 @@ with gr.Blocks() as demo:
     with gr.Column():
         gr.Markdown("# Protein Sequence Analysis")
         gr.Markdown(
-            "This app fetches protein sequence and annotation data from UniProt using a UniProt ID and prints a copy-pasteable table for note-taking. **DO NOT TRUST, THIS IS A CODING EXPERIMENT**"
+            "This app fetches protein sequence and annotation data from UniProt "
+            "using a "
+            "UniProt ID and prints a copy-pasteable table for note-taking. "
+            "**DO NOT TRUST, THIS IS A CODING EXPERIMENT**"
         )
         input_text = gr.Textbox(
             label="UniProt ID",

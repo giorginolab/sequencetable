@@ -34,20 +34,34 @@ The application retrieves protein data from UniProt and presents the following i
 
 ## Usage
 
-1. Launch the application
-2. Enter a valid UniProt ID (e.g., P53_HUMAN) in the input field
-3. Click "Submit" to generate the analysis
-4. Results will be displayed in a interactive data frame format
+1. Install [uv](https://docs.astral.sh/uv/) if it is not already available.
+2. Create the project environment and install the locked dependencies:
+
+   ```bash
+   uv sync
+   ```
+
+3. Launch the application:
+
+   ```bash
+   uv run gradio app.py
+   ```
+
+4. Enter a valid UniProt ID (e.g., P53_HUMAN) in the input field.
+5. Click "Submit" to generate the analysis.
+6. Results will be displayed in an interactive data frame format.
+
+To run the linter:
+
+```bash
+uv run ruff check .
+```
 
 ## Requirements
 
-- Python 3.7+
-- Gradio
-- Pandas
-- Requests
-- XML parsing libraries
+- Python 3.11+
+- Dependencies defined in `pyproject.toml` and locked in `uv.lock`
 
 ## Note
 
 The application processes UniProt's XML format to extract annotations. 
-

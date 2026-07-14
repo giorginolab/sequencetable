@@ -1,0 +1,25 @@
+[project]
+name = "protein-sequence-table"
+version = "0.1.0"
+description = "A Gradio app for viewing UniProt protein sequence annotations."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "gradio>=5.20.1",
+    "openpyxl>=3.1.5",
+    "pandas>=2.2.3",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9.10",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

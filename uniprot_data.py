@@ -113,9 +113,6 @@ def create_dataframe(protein_sequence, annotations):
         "site": "Phosphorylation sites",
     }
 
-    # Special mappings that need additional processing
-    region_mapping = {"pfam": "Pfam domain", "disorder": "Disorder"}
-
     for feature_type, values in annotations.items():
         feature_type = feature_type.lower()
 
